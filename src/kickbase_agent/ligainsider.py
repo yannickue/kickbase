@@ -87,10 +87,45 @@ class InjuryEntry:
 
 
 @dataclass
+class LineupSlot:
+    """Ein Positionsplatz in der voraussichtlichen Aufstellung.
+
+    Ligainsider zeigt je Platz einen projizierten Startelfspieler und optional
+    Konkurrenten um denselben Platz.
+    """
+
+    row: int  # 1 = Tor, dann aufsteigend Richtung Sturm
+    starter: str | None
+    alternatives: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ProbableLineup:
+    club: str
+    slots: list[LineupSlot] = field(default_factory=list)
+
+    @property
+    def starters(self) -> list[str]:
+        return [s.starter for s in self.slots if s.starter]
+
+    def role_of(self, player_name: str) -> str | None:
+        """"Startelf", "Alternative" oder None (gar nicht in der Grafik)."""
+        key = normalize_name(player_name)
+        for slot in self.slots:
+            if slot.starter and normalize_name(slot.starter) == key:
+                return "Startelf"
+        for slot in self.slots:
+            if any(normalize_name(a) == key for a in slot.alternatives):
+                return "Alternative"
+        return None
+
+
+@dataclass
 class TeamNews:
     club: str
     headlines: list[str] = field(default_factory=list)
     lineup: str | None = None  # zuletzt gemeldete Aufstellung als Rohtext
+    probable: ProbableLineup | None = None  # voraussichtliche Aufstellung (Grafik)
 
 
 @dataclass
@@ -181,6 +216,52 @@ class LigainsiderClient:
                 )
         return entries
 
+    def fetch_probable_lineup(self, club: str, path: str) -> ProbableLineup:
+        """Voraussichtliche Aufstellung aus der Aufstellungsgrafik der Vereinsseite.
+
+        In der Grafik steht je Positionsplatz der projizierte Startelfspieler sichtbar
+        (`sub_child` mit `display: block` bzw. ganz ohne `sub_child`-Container), während
+        Konkurrenten um denselben Platz ausgeblendet danebenliegen (`display: none`).
+        Genau diese Unterscheidung ist der Kern: Ein Spieler, den Ligainsider nur als
+        Alternative führt, ist eben *nicht* für die Startelf vorgesehen.
+        """
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(self._get(path), "lxml")
+        lineup = ProbableLineup(club=club)
+        pitch = soup.select_one("div.stadium_container_bg")
+        if pitch is None:
+            return lineup
+
+        for row_index, row in enumerate(pitch.select("div.player_position_row"), start=1):
+            for column in row.select("div.player_position_column"):
+                children = column.select("div.sub_child")
+                if not children:
+                    name_el = column.select_one("div.player_name")
+                    if name_el:
+                        lineup.slots.append(
+                            LineupSlot(row=row_index, starter=name_el.get_text(strip=True))
+                        )
+                    continue
+
+                starter: str | None = None
+                alternatives: list[str] = []
+                for child in children:
+                    name_el = child.select_one("div.player_name")
+                    if not name_el:
+                        continue
+                    name = name_el.get_text(strip=True)
+                    style = (child.get("style") or "").replace(" ", "").lower()
+                    if "display:none" in style:
+                        alternatives.append(name)
+                    else:
+                        starter = starter or name
+                if starter or alternatives:
+                    lineup.slots.append(
+                        LineupSlot(row=row_index, starter=starter, alternatives=alternatives)
+                    )
+        return lineup
+
     def fetch_team_news(self, club: str, path: str) -> TeamNews:
         """News-Schlagzeilen und zuletzt gemeldete Aufstellung eines Vereins."""
         from bs4 import BeautifulSoup
@@ -231,7 +312,26 @@ def collect(
     targets = TEAM_PAGES if clubs is None else {c: p for c, p in TEAM_PAGES.items() if c in clubs}
     for club, path in targets.items():
         try:
-            data.team_news[club] = client.fetch_team_news(club, path)
+            news = client.fetch_team_news(club, path)
         except Exception:
             continue  # einzelne Vereinsseite darf fehlschlagen
+        try:
+            news.probable = client.fetch_probable_lineup(club, path)
+        except Exception:
+            pass  # Aufstellungsgrafik ist optional
+        data.team_news[club] = news
     return data
+
+
+def role_lookup(data: LigainsiderData) -> dict[str, tuple[str, str]]:
+    """Normalisierter Spielername -> (Rolle, Verein) aus allen geladenen Aufstellungen."""
+    out: dict[str, tuple[str, str]] = {}
+    for club, news in data.team_news.items():
+        if not news.probable:
+            continue
+        for slot in news.probable.slots:
+            if slot.starter:
+                out[normalize_name(slot.starter)] = ("Startelf", club)
+            for alt in slot.alternatives:
+                out.setdefault(normalize_name(alt), ("Alternative", club))
+    return out

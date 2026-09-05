@@ -21,8 +21,10 @@ from .analytics import (
     analyze_market_premiums,
     analyze_own_transfers,
     analyze_rival_needs,
+    PurchaseReview,
     compute_player_signals,
     cost_basis_from_history,
+    market_value_on,
     season_start_from_history,
 )
 from .kickbase_client import KickbaseClient, MarketOffer, Player, _pick
@@ -47,6 +49,9 @@ class DeepBriefing:
     own_squad: list[tuple[Player, PlayerSignals]] = field(default_factory=list)
     # Spieler-ID -> (Einstandspreis, Kaufdatum) für die laufende Saison
     cost_basis: dict[str, tuple[float | None, str | None]] = field(default_factory=dict)
+    purchases: list[PurchaseReview] = field(default_factory=list)
+    # Spieler-ID -> Marktwert am Tag des Einstellens (Referenz für echte Aufschläge)
+    listing_reference: dict[str, float] = field(default_factory=dict)
     market: list[tuple[MarketOffer, PlayerSignals | None]] = field(default_factory=list)
     premium_stats: MarketPremiumStats | None = None
     transfer_review: TransferReview | None = None
@@ -113,8 +118,11 @@ def build_deep_briefing(
 
     # --- Tiefenanalyse eigener Kader ------------------------------------------
     log(f"Tiefendaten für {len(squad)} eigene Spieler…")
+    squad_mv_history: dict[str, dict[str, Any]] = {}
     for player in squad:
-        sig = _deep_player(client, league_id, player.id)
+        sig, mv_hist = _deep_player(client, league_id, player.id)
+        if mv_hist:
+            squad_mv_history[player.id] = mv_hist
         if sig:
             sig.position = player.position
             sig.team = player.team or sig.team
@@ -137,10 +145,23 @@ def build_deep_briefing(
             found = season_start_from_history(hist)
             if found and (season_start is None or found > season_start):
                 season_start = found
+        by_id = {p.id: p for p in squad}
         for player_id, hist in histories.items():
-            brief.cost_basis[player_id] = cost_basis_from_history(
-                hist, brief.manager_name, season_start
-            )
+            cost, bought_at = cost_basis_from_history(hist, brief.manager_name, season_start)
+            brief.cost_basis[player_id] = (cost, bought_at)
+            if cost and bought_at:
+                player = by_id.get(player_id)
+                brief.purchases.append(
+                    PurchaseReview(
+                        player=player.name if player else player_id,
+                        bought_at=bought_at,
+                        price=cost,
+                        market_value_then=market_value_on(
+                            squad_mv_history.get(player_id), bought_at
+                        ),
+                        market_value_now=player.market_value if player else None,
+                    )
+                )
 
     # --- Tiefenanalyse relevanter Marktkandidaten ------------------------------
     budget = brief.budget or 0
@@ -154,15 +175,21 @@ def build_deep_briefing(
     deep_ids = {o.player.id for o in deep_targets}
     for offer in market:
         if offer.player.id in deep_ids:
-            sig = _deep_player(client, league_id, offer.player.id)
+            sig, mv_hist = _deep_player(client, league_id, offer.player.id)
             if sig:
                 sig.position = offer.player.position
                 sig.team = offer.player.team or sig.team
+            # Der Angebotspreis wurde am Tag `dt` festgelegt — nur dieser Marktwert ist
+            # der richtige Bezugspunkt für den tatsächlich verlangten Aufschlag.
+            listed_on = offer.raw.get("dt")
+            reference = market_value_on(mv_hist, listed_on)
+            if reference:
+                brief.listing_reference[offer.player.id] = reference
             brief.market.append((offer, sig))
         else:
             brief.market.append((offer, None))
 
-    brief.premium_stats = analyze_market_premiums(market)
+    brief.premium_stats = analyze_market_premiums(market, brief.listing_reference)
 
     # --- Eigene Transferhistorie ------------------------------------------------
     if manager_id:
@@ -214,14 +241,20 @@ def build_deep_briefing(
     return brief
 
 
-def _deep_player(client: KickbaseClient, league_id: str, player_id: str) -> PlayerSignals | None:
-    """Detail + Marktwertverlauf + Leistungshistorie eines Spielers einsammeln."""
+def _deep_player(
+    client: KickbaseClient, league_id: str, player_id: str
+) -> tuple[PlayerSignals | None, dict[str, Any] | None]:
+    """Detail + Marktwertverlauf + Leistungshistorie eines Spielers einsammeln.
+
+    Gibt zusätzlich die rohe Marktwerthistorie zurück, weil daraus der Marktwert zu einem
+    beliebigen Stichtag rekonstruiert wird (Einstell- bzw. Kauftag).
+    """
     if not player_id:
-        return None
+        return None, None
     try:
         detail = client.get_player_detail(league_id, player_id)
     except Exception:
-        return None
+        return None, None
     mv_hist = None
     perf = None
     try:
@@ -233,7 +266,7 @@ def _deep_player(client: KickbaseClient, league_id: str, player_id: str) -> Play
     except Exception:
         pass
     time.sleep(API_DELAY)
-    return compute_player_signals(detail, mv_hist, perf)
+    return compute_player_signals(detail, mv_hist, perf), mv_hist
 
 
 # --------------------------------------------------------------------------------------
@@ -323,6 +356,16 @@ def format_briefing(brief: DeepBriefing) -> str:
 
         return "\n".join(lines)
 
+    roles = li.role_lookup(brief.ligainsider) if brief.ligainsider else {}
+
+    def role_note(name: str) -> str:
+        found = roles.get(li.normalize_name(name))
+        if not found:
+            return ""
+        role, _club = found
+        marker = "✅" if role == "Startelf" else "🔸"
+        return f" {marker} Ligainsider-Aufstellung: **{role}**"
+
     def fixture_note(team: str | None) -> str:
         if not team or not brief.fixtures or not brief.fixtures.available:
             return ""
@@ -370,6 +413,7 @@ def format_briefing(brief: DeepBriefing) -> str:
             )
         if player.status and player.status != "fit":
             head += f" — Kickbase-Status: {player.status}"
+        head += role_note(player.name)
         out.append(head)
         out.append(f"  {_signal_line(sig)}")
         if sig and sig.sample_warning:
@@ -390,11 +434,22 @@ def format_briefing(brief: DeepBriefing) -> str:
     out.append("## Transfermarkt")
     ps = brief.premium_stats
     if ps and ps.count:
+        bezug = (
+            "Marktwert am Tag des Einstellens"
+            if ps.reference == "listing"
+            else "heutiger Marktwert (Notbehelf, verzerrt)"
+        )
         out.append(
-            f"_Aufschlags-Niveau der Liga (nur Manager-Angebote, n={ps.count}): "
+            f"_Aufschlags-Niveau der Liga (nur Manager-Angebote, n={ps.count}, Bezug: {bezug}): "
             f"Median {_pct(ps.median_premium)}, Mittel {_pct(ps.mean_premium)}, "
             f"Spanne {_pct(ps.min_premium)} bis {_pct(ps.max_premium)}._"
         )
+        if ps.stale_listings:
+            out.append(
+                f"_⚠ {ps.stale_listings} Angebot(e) liegen heute unter dem aktuellen Marktwert. "
+                "Das ist **kein** Schnäppchen: Der Preis wurde beim Einstellen fixiert, der "
+                "Marktwert ist seitdem gestiegen. Unter Marktwert kaufen ist nicht möglich._"
+            )
         by_mgr = ", ".join(
             f"{m}: {_pct(sum(v) / len(v))}" for m, v in sorted(ps.by_manager.items())
         )
@@ -415,6 +470,7 @@ def format_briefing(brief: DeepBriefing) -> str:
             head += f", läuft in {offer.expires_in_seconds / 3600:.1f} Std. ab"
         if p.status and p.status != "fit":
             head += f" — Kickbase-Status: {p.status}"
+        head += role_note(p.name)
         out.append(head)
         if sig:
             out.append(f"  {_signal_line(sig)}")
@@ -424,6 +480,30 @@ def format_briefing(brief: DeepBriefing) -> str:
         if note:
             out.append(note)
     out.append("")
+
+    # --- tatsächlich gezahlter Aufschlag beim Kauf ---------------------------------
+    if brief.purchases:
+        out.append("## Gezahlter Aufschlag beim Kauf (Preis gegen Marktwert am Kauftag)")
+        out.append(
+            "_Trennt zwei Dinge, die sonst vermischt werden: was beim Kauf zu viel gezahlt "
+            "wurde (steuerbar) und wie sich der Marktwert danach entwickelt hat (Wette)._"
+        )
+        total_overpay = 0.0
+        for pr in sorted(
+            brief.purchases, key=lambda x: -(x.overpay_pct if x.overpay_pct is not None else -9)
+        ):
+            if pr.overpay is not None:
+                total_overpay += pr.overpay
+            out.append(
+                f"- **{pr.player}** ({pr.bought_at}): Preis {_eur(pr.price)} vs. Marktwert "
+                f"{_eur(pr.market_value_then)} = Aufschlag "
+                f"{(f'{pr.overpay_pct * 100:+.1f}%' if pr.overpay_pct is not None else '?')} "
+                f"({_signed_eur(pr.overpay)}) | Marktwert seit Kauf "
+                f"{_signed_eur(pr.value_change_since)}"
+            )
+        out.append("")
+        out.append(f"**Summe gezahlter Aufschlag: {_eur(total_overpay)}**")
+        out.append("")
 
     # --- eigene Transferhistorie -------------------------------------------------
     tr = brief.transfer_review

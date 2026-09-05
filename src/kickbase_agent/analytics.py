@@ -241,7 +241,11 @@ def compute_player_signals(
 
 @dataclass
 class MarketPremiumStats:
-    """Wie viel Aufschlag über Marktwert wird in dieser Liga aktuell verlangt."""
+    """Wie viel Aufschlag über Marktwert wird in dieser Liga verlangt.
+
+    `reference` sagt, worauf sich die Werte beziehen: "listing" (Marktwert am Tag des
+    Einstellens, korrekt) oder "today" (heutiger Marktwert, nur als Notbehelf).
+    """
 
     count: int = 0
     median_premium: float | None = None  # relativ, 0.10 = +10 %
@@ -249,21 +253,43 @@ class MarketPremiumStats:
     max_premium: float | None = None
     min_premium: float | None = None
     by_manager: dict[str, list[float]] = field(default_factory=dict)
+    reference: str = "today"
+    stale_listings: int = 0  # Angebote, deren Preis heute unter dem Marktwert liegt
 
 
-def analyze_market_premiums(offers: list[MarketOffer]) -> MarketPremiumStats:
-    """Auswertung der aktuell inserierten Manager-Angebote (Preis vs. Marktwert).
+def analyze_market_premiums(
+    offers: list[MarketOffer],
+    market_value_at_listing: dict[str, float] | None = None,
+) -> MarketPremiumStats:
+    """Auswertung der inserierten Manager-Angebote (Preis vs. Marktwert).
+
+    **Wichtig:** Der Angebotspreis wird beim Einstellen einmal festgelegt, der Marktwert
+    ändert sich danach täglich weiter. Ein Vergleich gegen den *heutigen* Marktwert misst
+    daher nicht das Preisverhalten des Anbieters, sondern nur, wie stark sich der Marktwert
+    seit dem Einstellen bewegt hat. Bei stark steigenden Spielern entsteht so der falsche
+    Eindruck eines Schnäppchens — kaufbar ist unter Marktwert ohnehin nicht.
+
+    Deshalb wird, wenn `market_value_at_listing` (Spieler-ID -> Marktwert am Einstelltag)
+    vorliegt, gegen diesen Referenzwert gerechnet.
 
     Nur Angebote von Liga-Mitgliedern zählen — Kickbase-eigene Angebote stehen per
     Definition exakt auf Marktwert und würden die Statistik verwässern.
     """
     stats = MarketPremiumStats()
+    reference_map = market_value_at_listing or {}
+    stats.reference = "listing" if reference_map else "today"
+
     premiums: list[float] = []
     for offer in offers:
-        mv = offer.player.market_value
-        if not offer.seller or not mv or not offer.price:
+        current_mv = offer.player.market_value
+        if not offer.seller or not offer.price:
             continue
-        premium = offer.price / mv - 1.0
+        if current_mv and offer.price < current_mv:
+            stats.stale_listings += 1
+        reference_mv = reference_map.get(offer.player.id) or current_mv
+        if not reference_mv:
+            continue
+        premium = offer.price / reference_mv - 1.0
         premiums.append(premium)
         stats.by_manager.setdefault(offer.seller, []).append(premium)
 
@@ -274,6 +300,70 @@ def analyze_market_premiums(offers: list[MarketOffer]) -> MarketPremiumStats:
         stats.max_premium = max(premiums)
         stats.min_premium = min(premiums)
     return stats
+
+
+def market_value_on(
+    mv_history: dict[str, Any] | None, target_day: Any, tolerance_days: int = 3
+) -> float | None:
+    """Marktwert an einem bestimmten Tag aus der Marktwerthistorie.
+
+    Die Historie liefert `dt` als Tage seit dem 1.1.1970. Liegt der exakte Tag nicht vor,
+    wird der nächstgelegene Tag innerhalb von `tolerance_days` genommen.
+    """
+    from datetime import date, timedelta
+
+    if not mv_history or target_day is None:
+        return None
+    if isinstance(target_day, str):
+        try:
+            target_day = date.fromisoformat(target_day[:10])
+        except ValueError:
+            return None
+
+    epoch = date(1970, 1, 1)
+    series: dict[Any, float] = {}
+    for item in mv_history.get("it") or []:
+        if item.get("mv") and item.get("dt") is not None:
+            series[epoch + timedelta(days=int(item["dt"]))] = float(item["mv"])
+    if not series:
+        return None
+    if target_day in series:
+        return series[target_day]
+    for offset in range(1, tolerance_days + 1):
+        for candidate in (target_day - timedelta(days=offset), target_day + timedelta(days=offset)):
+            if candidate in series:
+                return series[candidate]
+    return None
+
+
+@dataclass
+class PurchaseReview:
+    """Was wurde beim Kauf tatsächlich über Marktwert gezahlt."""
+
+    player: str
+    bought_at: str | None
+    price: float
+    market_value_then: float | None
+    market_value_now: float | None
+
+    @property
+    def overpay(self) -> float | None:
+        if self.market_value_then is None:
+            return None
+        return self.price - self.market_value_then
+
+    @property
+    def overpay_pct(self) -> float | None:
+        if not self.market_value_then:
+            return None
+        return self.price / self.market_value_then - 1.0
+
+    @property
+    def value_change_since(self) -> float | None:
+        """Marktwertentwicklung seit dem Kauf — trennt Fehlkauf von Pech."""
+        if self.market_value_now is None or self.market_value_then is None:
+            return None
+        return self.market_value_now - self.market_value_then
 
 
 @dataclass

@@ -51,3 +51,42 @@ def test_index_keeps_more_severe_entry_on_name_clash():
     index = data.by_player_key()
     assert index[normalize_name("Schlotterbeck")].status == "Aufbautraining"
     assert index[normalize_name("Emre Can")].severity == 5
+
+
+LINEUP_HTML = """
+<html><body><div class="stadium_container_bg">
+  <div class="player_position_row">
+    <div class="player_position_column"><div class="player_name"><a>Zentner</a></div></div>
+  </div>
+  <div class="player_position_row">
+    <div class="player_position_column">
+      <div class="sub_child" style="display: block;"><div class="player_name"><a>Gruber</a></div></div>
+      <div class="sub_child" style="display: none;"><div class="player_name"><a>Posch</a></div></div>
+    </div>
+    <div class="player_position_column"><div class="player_name"><a>Potulski</a></div></div>
+  </div>
+</div></body></html>
+"""
+
+
+def test_probable_lineup_separates_starters_from_alternatives():
+    """Ein ausgeblendeter Spieler ist Konkurrent um den Platz, kein Startelfspieler."""
+    lineup = _StubClient(LINEUP_HTML).fetch_probable_lineup("Mainz", "/x/17/")
+
+    assert lineup.starters == ["Zentner", "Gruber", "Potulski"]
+    assert lineup.role_of("Gruber") == "Startelf"
+    assert lineup.role_of("Posch") == "Alternative"
+    # Kickbase liefert nur den Nachnamen — der Abgleich muss trotzdem greifen.
+    assert lineup.role_of("Stefan Posch") == "Alternative"
+    assert lineup.role_of("Irgendwer") is None
+
+
+def test_role_lookup_indexes_all_loaded_teams():
+    from kickbase_agent.ligainsider import LigainsiderData, TeamNews, role_lookup
+
+    lineup = _StubClient(LINEUP_HTML).fetch_probable_lineup("Mainz", "/x/17/")
+    data = LigainsiderData(team_news={"Mainz": TeamNews(club="Mainz", probable=lineup)})
+
+    lookup = role_lookup(data)
+    assert lookup[normalize_name("Posch")] == ("Alternative", "Mainz")
+    assert lookup[normalize_name("Gruber")] == ("Startelf", "Mainz")

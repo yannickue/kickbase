@@ -138,3 +138,69 @@ def test_cost_basis_returns_none_without_own_purchase():
 
     history = [{"t": 2, "trp": 5_000_000, "unm": "Rivale", "dt": "2026-08-14T20:07:33Z"}]
     assert cost_basis_from_history(history, "yannolmaker", None) == (None, None)
+
+
+def test_premium_uses_listing_day_market_value_not_todays():
+    """Ein gestiegener Marktwert darf ein Angebot nicht als Schnäppchen erscheinen lassen.
+
+    Unter Marktwert kaufen ist in Kickbase nicht möglich; ein Preis unter dem heutigen
+    Marktwert bedeutet nur, dass der Wert seit dem Einstellen gestiegen ist.
+    """
+    from kickbase_agent.analytics import analyze_market_premiums
+
+    offer = MarketOffer(
+        player=_player(id="p9", market_value=6_310_485),  # heute
+        price=5_345_826,
+        expires_in_seconds=None,
+        seller="Rivale",
+    )
+
+    naive = analyze_market_premiums([offer])
+    assert naive.reference == "today"
+    assert naive.median_premium < 0  # sieht fälschlich nach Rabatt aus
+    assert naive.stale_listings == 1
+
+    korrekt = analyze_market_premiums([offer], {"p9": 5_100_000})
+    assert korrekt.reference == "listing"
+    assert korrekt.median_premium > 0  # tatsächlich ein Aufschlag
+
+
+def test_market_value_on_reads_history_by_date():
+    from datetime import date, timedelta
+
+    from kickbase_agent.analytics import market_value_on
+
+    epoch = date(1970, 1, 1)
+    day = date(2026, 8, 14)
+    history = {
+        "it": [
+            {"dt": (day - epoch).days - 1, "mv": 30_000_000},
+            {"dt": (day - epoch).days, "mv": 30_955_729},
+            {"dt": (day - epoch).days + 1, "mv": 31_500_000},
+        ]
+    }
+    assert market_value_on(history, "2026-08-14") == 30_955_729
+    assert market_value_on(history, day) == 30_955_729
+    # Fehlender Tag wird aus der Nachbarschaft aufgefüllt …
+    assert market_value_on(history, date(2026, 8, 16)) == 31_500_000
+    # … aber nicht über die Toleranz hinaus.
+    assert market_value_on(history, date(2026, 12, 1)) is None
+    assert market_value_on(None, "2026-08-14") is None
+
+
+def test_purchase_review_separates_overpay_from_later_drift():
+    from kickbase_agent.analytics import PurchaseReview
+
+    posch = PurchaseReview(
+        player="Posch",
+        bought_at="2026-08-18",
+        price=13_252_111,
+        market_value_then=9_957_448,
+        market_value_now=8_885_142,
+    )
+    assert round(posch.overpay_pct * 100, 1) == 33.1
+    assert posch.overpay == 13_252_111 - 9_957_448
+    assert posch.value_change_since == 8_885_142 - 9_957_448
+
+    unbekannt = PurchaseReview("X", "2026-08-18", 1_000, None, None)
+    assert unbekannt.overpay is None and unbekannt.overpay_pct is None
