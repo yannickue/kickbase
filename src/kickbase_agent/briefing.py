@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import ligainsider as li
+from . import openligadb, transfermarkt
 from .analytics import (
     MarketPremiumStats,
     PlayerSignals,
@@ -52,6 +53,8 @@ class DeepBriefing:
     rival_needs: list[RivalNeed] = field(default_factory=list)
     table: list[dict[str, Any]] = field(default_factory=list)
     ligainsider: li.LigainsiderData | None = None
+    transfermarkt: transfermarkt.TransfermarktData | None = None
+    fixtures: openligadb.FixtureData | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -197,6 +200,17 @@ def build_deep_briefing(
         if brief.ligainsider and not brief.ligainsider.available:
             brief.notes.append(brief.ligainsider.error or "Ligainsider nicht verfügbar")
 
+        log("Transfermarkt (Ausfälle mit Rückkehrdatum)…")
+        brief.transfermarkt = transfermarkt.collect()
+        if brief.transfermarkt and not brief.transfermarkt.available:
+            brief.notes.append(brief.transfermarkt.error or "Transfermarkt nicht verfügbar")
+
+        log("OpenLigaDB (Spielplan)…")
+        # Kickbase zählt Spieltage ab 1; die Saison 2026/27 heißt bei OpenLigaDB "2026".
+        brief.fixtures = openligadb.collect(season=2026, matchday=brief.matchday)
+        if brief.fixtures and not brief.fixtures.available:
+            brief.notes.append(brief.fixtures.error or "OpenLigaDB nicht verfügbar")
+
     return brief
 
 
@@ -274,19 +288,49 @@ def _signal_line(sig: PlayerSignals | None) -> str:
 def format_briefing(brief: DeepBriefing) -> str:
     """Erzeugt das Textbriefing."""
     injuries = brief.ligainsider.by_player_key() if brief.ligainsider else {}
+    tm_absences = {}
+    if brief.transfermarkt and brief.transfermarkt.available:
+        for absence in brief.transfermarkt.absences:
+            tm_absences[li.normalize_name(absence.player)] = absence
 
     def injury_note(name: str) -> str:
-        entry = injuries.get(li.normalize_name(name))
-        if not entry:
+        key = li.normalize_name(name)
+        lines: list[str] = []
+
+        entry = injuries.get(key)
+        if entry:
+            parts = [entry.status or "Ausfall"]
+            if entry.reason:
+                parts.append(entry.reason)
+            if entry.since:
+                parts.append(f"seit {entry.since}")
+            if entry.news:
+                parts.append(f"News: {entry.news}")
+            lines.append("  ⚠ LIGAINSIDER: " + " | ".join(parts))
+
+        absence = tm_absences.get(key)
+        if absence:
+            parts = [absence.reason or "Ausfall"]
+            if absence.return_date:
+                days = absence.days_until_return()
+                back = absence.return_date.strftime("%d.%m.%Y")
+                parts.append(
+                    f"Rückkehr ca. {back}" + (f" (in {days} Tagen)" if days is not None else "")
+                )
+            else:
+                parts.append("Rückkehr offen")
+            lines.append("  ⚠ TRANSFERMARKT: " + " | ".join(parts))
+
+        return "\n".join(lines)
+
+    def fixture_note(team: str | None) -> str:
+        if not team or not brief.fixtures or not brief.fixtures.available:
             return ""
-        parts = [entry.status or "Ausfall"]
-        if entry.reason:
-            parts.append(entry.reason)
-        if entry.since:
-            parts.append(f"seit {entry.since}")
-        if entry.news:
-            parts.append(f"News: {entry.news}")
-        return "  ⚠ LIGAINSIDER: " + " | ".join(parts)
+        found = brief.fixtures.next_opponent(team)
+        if not found:
+            return ""
+        opponent, at_home = found
+        return f" [nächstes Spiel: {'H' if at_home else 'A'} vs. {opponent}]"
 
     out: list[str] = []
     out.append(f"# Kickbase-Tiefenanalyse — {brief.league_name}")
@@ -311,7 +355,10 @@ def format_briefing(brief: DeepBriefing) -> str:
     total_cost = 0.0
     total_value = 0.0
     for player, sig in brief.own_squad:
-        head = f"- **{player.name}** ({player.position or '?'}, {player.team or '?'}) — MW {_eur(player.market_value)}"
+        head = (
+            f"- **{player.name}** ({player.position or '?'}, {player.team or '?'})"
+            f"{fixture_note(player.team)} — MW {_eur(player.market_value)}"
+        )
         cost, bought_at = brief.cost_basis.get(player.id, (None, None))
         if cost:
             pnl = (player.market_value or 0) - cost
@@ -359,7 +406,8 @@ def format_briefing(brief: DeepBriefing) -> str:
         if offer.price and p.market_value:
             premium = f" ({(offer.price / p.market_value - 1) * 100:+.1f}% zum MW)"
         head = (
-            f"- **{p.name}** ({p.position or '?'}, {p.team or '?'}) — "
+            f"- **{p.name}** ({p.position or '?'}, {p.team or '?'})"
+            f"{fixture_note(p.team)} — "
             f"Preis {_eur(offer.price)}{premium}, MW {_eur(p.market_value)}, "
             f"Anbieter: {offer.seller or 'Kickbase'}"
         )
@@ -435,6 +483,49 @@ def format_briefing(brief: DeepBriefing) -> str:
             for h in news.headlines[:6]:
                 out.append(f"- News: {h}")
         out.append("")
+
+    # --- Spielplan ------------------------------------------------------------------
+    if brief.fixtures and brief.fixtures.available and brief.fixtures.fixtures:
+        out.append(f"## Spielplan — {brief.fixtures.matchday}. Spieltag")
+        for fx in brief.fixtures.fixtures:
+            status = " (beendet)" if fx.finished else ""
+            kickoff = (fx.kickoff or "")[:16].replace("T", " ")
+            out.append(f"- {fx.home_team} vs. {fx.away_team}{status}  {kickoff}")
+        out.append("")
+
+    # --- Quellen ---------------------------------------------------------------------
+    out.append("## Quellen und Methodik")
+    out.append(
+        "- **Kickbase v4 API** (eigener Account, nur lesend): Kader, Budget, Marktwerte und "
+        "-verläufe (92 Tage), Einsatzminuten, Punktehistorie seit 2013, Transferhistorie je "
+        "Spieler und Manager, Kader aller Mitmanager, Liga-Ranking."
+    )
+    if brief.ligainsider and brief.ligainsider.available:
+        out.append(
+            f"- **Ligainsider**: {len(brief.ligainsider.injuries)} Ausfälle ligaweit, "
+            "Vereinsnews inkl. Trainer-/PK-Aussagen, zuletzt gemeldete Aufstellungen."
+        )
+    if brief.transfermarkt and brief.transfermarkt.available:
+        with_date = sum(1 for a in brief.transfermarkt.absences if a.return_date)
+        out.append(
+            f"- **Transfermarkt**: {len(brief.transfermarkt.absences)} Ausfälle, davon "
+            f"{with_date} mit konkretem voraussichtlichem Rückkehrdatum."
+        )
+    if brief.fixtures and brief.fixtures.available:
+        out.append("- **OpenLigaDB** (offene Bundesliga-API): Spielpaarungen des Spieltags.")
+    out.append(
+        "- **Kicker**: bewusst nicht abgefragt. Die robots.txt von kicker.de sperrt "
+        "KI-Crawler (u.a. GPTBot und ChatGPT-User) ausdrücklich aus und verbietet allen "
+        "Clients den redaktionellen Bereich `/news/fussball*`."
+    )
+    out.append("")
+    out.append(
+        "**Methodik-Hinweis:** Saisonpunkte sind nach wenigen Spieltagen kaum aussagekräftig. "
+        "Deshalb werden Einsatzminuten, Punkte pro 90 Minuten und ein Shrinkage-Schätzer "
+        "gegen die Vorsaison verwendet; Werte aus sehr kleinen Stichproben sind mit ⓘ "
+        "markiert und sollten nicht als Prognose gelesen werden."
+    )
+    out.append("")
 
     if brief.notes:
         out.append("## Hinweise zur Datenlage")
