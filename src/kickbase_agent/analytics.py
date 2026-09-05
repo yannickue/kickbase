@@ -346,6 +346,38 @@ def analyze_own_transfers(transfers: list[dict[str, Any]]) -> TransferReview:
     return review
 
 
+def cost_basis_from_history(
+    history: list[dict[str, Any]],
+    my_manager_name: str,
+    season_start: str | None = None,
+) -> tuple[float | None, str | None]:
+    """Ermittelt Einstandspreis und Kaufdatum eines Spielers aus seiner Transferhistorie.
+
+    In der Historie steht bei einem Kauf (`t` = 2 mit Preis) der **Käufer** in `unm`.
+    Ein Eintrag mit `t` = 4 markiert den Saison-Reset; Käufe davor gehören zur Vorsaison
+    und werden über `season_start` ausgefiltert.
+
+    Gibt (Preis, Datum) des letzten eigenen Kaufs zurück, sonst (None, None).
+    """
+    mine = [
+        h
+        for h in history
+        if h.get("unm") == my_manager_name
+        and h.get("trp")
+        and (season_start is None or str(h.get("dt") or "") >= season_start)
+    ]
+    if not mine:
+        return None, None
+    last = max(mine, key=lambda h: str(h.get("dt") or ""))
+    return float(last["trp"]), str(last.get("dt") or "")[:10]
+
+
+def season_start_from_history(history: list[dict[str, Any]]) -> str | None:
+    """Zeitpunkt des letzten Saison-Resets (`t` = 4) aus einer Transferhistorie."""
+    resets = [str(h.get("dt")) for h in history if h.get("t") == 4 and h.get("dt")]
+    return max(resets)[:10] if resets else None
+
+
 # --------------------------------------------------------------------------------------
 # Konkurrenzanalyse
 # --------------------------------------------------------------------------------------

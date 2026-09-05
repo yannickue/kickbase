@@ -113,3 +113,28 @@ def test_rival_needs_detect_position_gaps():
     full = next(n for n in needs if n.manager == "Voll")
     assert "Mittelfeld" in thin.gaps and "Sturm" in thin.gaps
     assert full.gaps == []
+
+
+def test_cost_basis_uses_last_own_purchase_after_season_reset():
+    """Käufe aus der Vorsaison dürfen den Einstandspreis nicht verfälschen."""
+    from kickbase_agent.analytics import cost_basis_from_history, season_start_from_history
+
+    history = [
+        {"t": 2, "trp": 15_661_390, "unm": "yannolmaker", "dt": "2025-08-19T16:07:47Z"},
+        {"t": 4, "trp": 0, "dt": "2026-08-07T16:21:10Z"},  # Saison-Reset
+        {"t": 2, "trp": 31_852_111, "unm": "yannolmaker", "dt": "2026-08-14T20:07:33Z"},
+        {"t": 2, "trp": 9_000_000, "unm": "Rivale", "dt": "2026-08-20T10:00:00Z"},
+    ]
+    season_start = season_start_from_history(history)
+    assert season_start == "2026-08-07"
+
+    cost, bought_at = cost_basis_from_history(history, "yannolmaker", season_start)
+    assert cost == 31_852_111
+    assert bought_at == "2026-08-14"
+
+
+def test_cost_basis_returns_none_without_own_purchase():
+    from kickbase_agent.analytics import cost_basis_from_history
+
+    history = [{"t": 2, "trp": 5_000_000, "unm": "Rivale", "dt": "2026-08-14T20:07:33Z"}]
+    assert cost_basis_from_history(history, "yannolmaker", None) == (None, None)

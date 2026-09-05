@@ -21,6 +21,8 @@ from .analytics import (
     analyze_own_transfers,
     analyze_rival_needs,
     compute_player_signals,
+    cost_basis_from_history,
+    season_start_from_history,
 )
 from .kickbase_client import KickbaseClient, MarketOffer, Player, _pick
 
@@ -42,6 +44,8 @@ class DeepBriefing:
     matchday: int | None = None
 
     own_squad: list[tuple[Player, PlayerSignals]] = field(default_factory=list)
+    # Spieler-ID -> (Einstandspreis, Kaufdatum) für die laufende Saison
+    cost_basis: dict[str, tuple[float | None, str | None]] = field(default_factory=dict)
     market: list[tuple[MarketOffer, PlayerSignals | None]] = field(default_factory=list)
     premium_stats: MarketPremiumStats | None = None
     transfer_review: TransferReview | None = None
@@ -114,6 +118,26 @@ def build_deep_briefing(
             brief.own_squad.append((player, sig))
         else:
             brief.own_squad.append((player, PlayerSignals(player_id=player.id, name=player.name)))
+
+    # --- Einstandspreise: was wurde für den aktuellen Kader tatsächlich bezahlt --
+    if brief.manager_name:
+        log("Einstandspreise des Kaders…")
+        season_start: str | None = None
+        histories: dict[str, list[dict[str, Any]]] = {}
+        for player in squad:
+            try:
+                histories[player.id] = client.get_player_transfer_history(league_id, player.id)
+            except Exception:
+                continue
+            time.sleep(API_DELAY)
+        for hist in histories.values():
+            found = season_start_from_history(hist)
+            if found and (season_start is None or found > season_start):
+                season_start = found
+        for player_id, hist in histories.items():
+            brief.cost_basis[player_id] = cost_basis_from_history(
+                hist, brief.manager_name, season_start
+            )
 
     # --- Tiefenanalyse relevanter Marktkandidaten ------------------------------
     budget = brief.budget or 0
@@ -284,8 +308,19 @@ def format_briefing(brief: DeepBriefing) -> str:
         "Shrinkage-Schätzer aus aktueller Saison + Vorsaison, skaliert auf die "
         "erwartete Einsatzzeit._"
     )
+    total_cost = 0.0
+    total_value = 0.0
     for player, sig in brief.own_squad:
         head = f"- **{player.name}** ({player.position or '?'}, {player.team or '?'}) — MW {_eur(player.market_value)}"
+        cost, bought_at = brief.cost_basis.get(player.id, (None, None))
+        if cost:
+            pnl = (player.market_value or 0) - cost
+            total_cost += cost
+            total_value += player.market_value or 0
+            head += (
+                f" | Einstand {_eur(cost)} am {bought_at} → **{_signed_eur(pnl)}** "
+                f"({pnl / cost * 100:+.1f}%)"
+            )
         if player.status and player.status != "fit":
             head += f" — Kickbase-Status: {player.status}"
         out.append(head)
@@ -295,6 +330,13 @@ def format_briefing(brief: DeepBriefing) -> str:
         note = injury_note(player.name)
         if note:
             out.append(note)
+    if total_cost:
+        delta = total_value - total_cost
+        out.append("")
+        out.append(
+            f"**Kader-Bilanz:** {_eur(total_cost)} bezahlt, aktuell {_eur(total_value)} wert "
+            f"= **{_signed_eur(delta)}** ({delta / total_cost * 100:+.1f}%) unrealisiert."
+        )
     out.append("")
 
     # --- Markt ----------------------------------------------------------------
