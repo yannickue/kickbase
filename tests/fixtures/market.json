@@ -1,0 +1,32 @@
+{
+  "it": [
+    {
+      "i": "p4",
+      "fn": "Florian",
+      "n": "Wirtz",
+      "pos": "MF",
+      "tn": "Leverkusen",
+      "mv": 45000000,
+      "mvt": "up",
+      "tp": 240,
+      "st": "fit",
+      "prc": 46500000,
+      "exs": "2026-09-06T18:00:00Z",
+      "selN": null
+    },
+    {
+      "i": "p5",
+      "fn": "Serhou",
+      "n": "Guirassy",
+      "pos": "ST",
+      "tn": "Dortmund",
+      "mv": 18000000,
+      "mvt": "up",
+      "tp": 190,
+      "st": "fit",
+      "prc": 3900000,
+      "exs": "2026-09-06T12:00:00Z",
+      "selN": "Rivale_Max"
+    }
+  ]
+}
