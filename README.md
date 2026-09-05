@@ -55,6 +55,9 @@ python -m kickbase_agent.main
 
 Optionen:
 
+- `--deep`: **Tiefenanalyse.** Statt der Kurzübersicht wird ein vollständiges Briefing
+  erzeugt (siehe unten). Braucht keinen Anthropic-Key, dauert aber ein paar Minuten.
+- `--no-ligainsider`: im Deep-Modus auf die Ligainsider-Quelle verzichten.
 - `--league-id <id>`: explizite Liga wählen (überschreibt `KICKBASE_LEAGUE_ID`), nötig falls
   du in mehreren Ligen spielst und keine ID in `.env` gesetzt ist.
 - `--output report.md`: Bericht zusätzlich als Markdown-Datei speichern.
@@ -68,6 +71,45 @@ Beispiel:
 ```bash
 python -m kickbase_agent.main --output berichte/$(date +%F).md
 ```
+
+## Die Tiefenanalyse (`--deep`)
+
+```bash
+python -m kickbase_agent.main --deep --output bericht.md
+```
+
+Der Deep-Modus sammelt deutlich mehr als den aktuellen Kontostand und beantwortet damit die
+Fragen, an denen eine Saison tatsächlich hängt.
+
+**Warum nicht einfach Saisonpunkte?** Nach zwei, drei Spieltagen sind Saisonpunkte fast
+reines Rauschen: Ein Spieler mit einem Tor aus fünf Einsatzminuten hat rechnerisch einen
+Traumschnitt, ohne dass das etwas über das nächste Spiel aussagt. Deshalb werden Prädiktoren
+gebildet, die früher belastbar sind:
+
+| Signal | Warum es zählt |
+| --- | --- |
+| Einsätze und Minuten pro Spieltag | Wer nicht spielt, punktet nicht — das stabilste Frühsignal überhaupt |
+| Punkte pro 90 Minuten | Macht Joker und Dauerbrenner vergleichbar |
+| Vorsaison als Prior + Shrinkage | Kleine Stichproben werden Richtung Vorsaisonleistung gezogen, statt Ausreißer für bare Münze zu nehmen |
+| Marktwertverlauf (24h/7T/30T, Lage in der 92-Tage-Spanne) | Kauf-/Verkaufszeitpunkt, Erkennen von Über- und Untertreibungen |
+| Aufschlagsniveau der Liga | Kalibriert, wie viel Overpay in *dieser* Liga überhaupt durchgeht — je Anbieter aufgeschlüsselt |
+| Eigene Transferhistorie | Deckt eigene Verhaltensmuster auf (z.B. verlustreiche Schnellverkäufe) |
+| Kaderlücken der Konkurrenz | Grundlage für "wer würde mir diesen Spieler abkaufen" |
+| Ligainsider: Verletzungen, Sperren, PK-News, letzte Aufstellungen | Die Real-Life-Ebene, die Kickbase selbst nicht kennt |
+
+Der Bericht ist bewusst ein Briefing und kein fertiges Urteil: Er legt die Signale offen,
+inklusive Warnungen bei zu kleiner Datenbasis (`ⓘ`) und Ausfallhinweisen (`⚠`), damit die
+eigentliche Bewertung nachvollziehbar bleibt.
+
+### Datenquellen im Deep-Modus
+
+- **Kickbase v4**: Spielerdetails (Einsatzsekunden, Tore, Vorlagen, Spieltags-Historie),
+  Marktwertverlauf über 92 Tage, Transferhistorie je Spieler und je Manager,
+  Kader aller Mitmanager, Liga-Ranking.
+- **Ligainsider** (`ligainsider.py`): Verletzungs- und Sperrenliste der gesamten Liga,
+  Vereinsnews (inkl. Trainer-/PK-Aussagen) und die zuletzt gemeldete Aufstellung je Verein.
+  Fällt die Quelle aus oder ändert sich das Markup, liefert der Parser leere Listen statt
+  falscher Daten — die Analyse läuft dann ohne diesen Teil weiter.
 
 ## Wichtiger Hinweis zur Kickbase-API
 

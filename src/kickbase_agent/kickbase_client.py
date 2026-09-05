@@ -277,6 +277,88 @@ class KickbaseClient:
         items = _pick(data, "it", "items", default=[]) or []
         return {str(_pick(item, "tid", default="")): _pick(item, "tn", "name", default="?") for item in items}
 
+    # -- Tiefendaten pro Spieler ---------------------------------------------
+
+    def get_player_detail(self, league_id: str, player_id: str) -> dict[str, Any]:
+        """Detailstatistik eines Spielers.
+
+        Enthält u.a. `sec` (Gesamt-Einsatzsekunden der Saison), `g`/`a` (Tore/Vorlagen),
+        `ph` (Liste pro Spieltag mit `hp` = hat gespielt und `p` = Punkte), `mv`
+        (Marktwert), `tfhmvt` (Marktwertänderung der letzten 24h) und `st` (Status-Code).
+        """
+        data = self._request("GET", f"/v4/leagues/{league_id}/players/{player_id}")
+        self._dump(f"player_{player_id}_detail", data)
+        return data
+
+    def get_player_market_value_history(
+        self, league_id: str, player_id: str, days: int = 92
+    ) -> dict[str, Any]:
+        """Marktwertverlauf. `it` ist eine Tagesreihe mit `dt` (Tage seit Epoch) und `mv`."""
+        data = self._request(
+            "GET", f"/v4/leagues/{league_id}/players/{player_id}/marketValue/{days}"
+        )
+        self._dump(f"player_{player_id}_mv_{days}", data)
+        return data
+
+    def get_player_transfer_history(self, league_id: str, player_id: str) -> list[dict[str, Any]]:
+        """Wer hat diesen Spieler in dieser Liga wann zu welchem Preis gehandelt.
+
+        `t` ist der Vorgangstyp (0 = Kauf durch Manager, 2 = Verkauf/Abgabe),
+        `trp` der Transferpreis, `unm` der Managername.
+        """
+        data = self._request(
+            "GET",
+            f"/v4/leagues/{league_id}/players/{player_id}/transferHistory",
+            params={"start": "0"},
+        )
+        self._dump(f"player_{player_id}_transferhistory", data)
+        return _pick(data, "it", default=[]) or []
+
+    def get_player_performance(self, league_id: str, player_id: str) -> list[dict[str, Any]]:
+        """Saison-für-Saison-Leistungsdaten; pro Spieltag u.a. `p` (Punkte) und `mp` (Minuten)."""
+        data = self._request("GET", f"/v4/leagues/{league_id}/players/{player_id}/performance")
+        self._dump(f"player_{player_id}_performance", data)
+        return _pick(data, "it", default=[]) or []
+
+    # -- Manager / Konkurrenz -------------------------------------------------
+
+    def get_managers(self, league_id: str) -> list[dict[str, str]]:
+        """Alle Manager der Liga (ID + Name)."""
+        data = self._request("GET", f"/v4/leagues/{league_id}/settings/managers")
+        self._dump(f"league_{league_id}_managers", data)
+        items = _pick(data, "us", "items", default=[]) or []
+        return [
+            {"id": str(_pick(m, "i", default="")), "name": _pick(m, "n", default="?")}
+            for m in items
+        ]
+
+    def get_manager_dashboard(self, league_id: str, manager_id: str) -> dict[str, Any]:
+        """Kennzahlen eines Managers: `tv` (Teamwert), `prft` (Transfergewinn), `pl` (Platz)."""
+        data = self._request("GET", f"/v4/leagues/{league_id}/managers/{manager_id}/dashboard")
+        self._dump(f"manager_{manager_id}_dashboard", data)
+        return data
+
+    def get_manager_squad(self, league_id: str, manager_id: str) -> list[Player]:
+        """Kader eines beliebigen Managers (für Konkurrenz-/Bedarfsanalyse)."""
+        data = self._request("GET", f"/v4/leagues/{league_id}/managers/{manager_id}/squad")
+        self._dump(f"manager_{manager_id}_squad", data)
+        items = _pick(data, "it", default=[]) or []
+        return [Player.from_raw(item) for item in items]
+
+    def get_manager_transfers(self, league_id: str, manager_id: str) -> list[dict[str, Any]]:
+        """Transferhistorie eines Managers.
+
+        Pro Eintrag: `pn` (Spielername), `tty` (1 = Kauf, 2 = Verkauf), `trp` (Preis),
+        `othnm` (Gegenpartei, fehlt bei Geschäften mit Kickbase selbst), `dt` (Zeitpunkt).
+        """
+        data = self._request(
+            "GET",
+            f"/v4/leagues/{league_id}/managers/{manager_id}/transfer",
+            params={"start": "0"},
+        )
+        self._dump(f"manager_{manager_id}_transfers", data)
+        return _pick(data, "it", default=[]) or []
+
 
 def resolve_league_id(client: KickbaseClient, explicit_league_id: str | None) -> str:
     """Bestimmt die zu verwendende Liga-ID.

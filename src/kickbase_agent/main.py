@@ -35,6 +35,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--mock", action="store_true", help="Beispieldaten aus tests/fixtures/ statt echtem Login nutzen"
     )
     parser.add_argument(
+        "--deep",
+        action="store_true",
+        help=(
+            "Tiefenanalyse: Einsatzzeiten, Punkte pro 90 Minuten, Vorsaison-Prior, "
+            "Marktwertverlauf, Aufschlagsniveau der Liga, eigene Transferhistorie, "
+            "Kaderlücken der Konkurrenz und Ligainsider-Daten (Verletzungen, News, "
+            "Aufstellungen). Dauert deutlich länger als der Standardlauf."
+        ),
+    )
+    parser.add_argument(
+        "--no-ligainsider",
+        action="store_true",
+        help="Im --deep-Modus auf Ligainsider verzichten (nur Kickbase-Daten).",
+    )
+    parser.add_argument(
         "--no-claude",
         action="store_true",
         help=(
@@ -143,9 +158,51 @@ def load_live_snapshot(league_id_arg: str | None, dump_dir: str | None) -> Kickb
     )
 
 
+def run_deep(args: argparse.Namespace) -> str:
+    """Tiefenanalyse: alle Datenquellen einsammeln und als Briefing formatieren."""
+    from .briefing import build_deep_briefing, format_briefing
+
+    email = os.environ.get("KICKBASE_EMAIL")
+    password = os.environ.get("KICKBASE_PASSWORD")
+    if not email or not password:
+        raise KickbaseError("KICKBASE_EMAIL / KICKBASE_PASSWORD nicht gesetzt (siehe .env.example).")
+
+    client = KickbaseClient(dump_dir=args.dump_raw)
+    client.login(email, password)
+    league_id = resolve_league_id(
+        client, args.league_id or os.environ.get("KICKBASE_LEAGUE_ID")
+    )
+
+    brief = build_deep_briefing(
+        client,
+        league_id,
+        with_ligainsider=not args.no_ligainsider,
+        progress=lambda m: print(f"  … {m}", file=sys.stderr),
+    )
+    return format_briefing(brief)
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = parse_args(argv)
+
+    # --- Tiefenanalyse ------------------------------------------------------
+    # Der Deep-Modus erzeugt bewusst nur das Briefing (kein Anthropic-Call) und braucht
+    # deshalb keinen API-Key: Die Auswertung übernimmt eine laufende Claude-Sitzung.
+    if args.deep:
+        if args.mock:
+            print("Fehler: --deep braucht echte Daten und geht nicht mit --mock.", file=sys.stderr)
+            return 1
+        try:
+            report = run_deep(args)
+        except KickbaseError as exc:
+            print(f"Fehler: {exc}", file=sys.stderr)
+            return 1
+        print(report)
+        if args.output:
+            out_path = write_report(report, args.output)
+            print(f"\nBericht gespeichert unter: {out_path}", file=sys.stderr)
+        return 0
 
     api_key = None
     model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
