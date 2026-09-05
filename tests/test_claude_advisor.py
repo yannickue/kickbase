@@ -36,7 +36,7 @@ def make_snapshot() -> KickbaseSnapshot:
                 status_code=0,
             ),
             price=46_500_000,
-            expires_at="2026-09-06T18:00:00Z",
+            expires_in_seconds=64800,
             seller=None,
         )
     ]

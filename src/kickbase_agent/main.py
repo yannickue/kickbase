@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .claude_advisor import DEFAULT_MODEL, KickbaseSnapshot, get_recommendation
+from .claude_advisor import DEFAULT_MODEL, KickbaseSnapshot, build_user_prompt, get_recommendation
 from .kickbase_client import (
     DEFAULT_COMPETITION_ID,
     KickbaseClient,
@@ -33,6 +33,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--mock", action="store_true", help="Beispieldaten aus tests/fixtures/ statt echtem Login nutzen"
+    )
+    parser.add_argument(
+        "--no-claude",
+        action="store_true",
+        help=(
+            "Keinen Anthropic-API-Call machen (kein API-Guthaben nötig). Gibt stattdessen nur "
+            "die aufbereiteten Kickbase-Daten aus, z.B. zum manuellen Einfügen in ein "
+            "Claude-Gespräch oder zur Auswertung durch eine laufende Claude-Code-Session."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -72,11 +81,12 @@ def load_mock_snapshot() -> KickbaseSnapshot:
         for row in ranking_raw
     ]
     own = next((r for r in table if r["user_id"] == "mock-user-1"), None)
+    team_value = sum(p.market_value for p in squad if p.market_value is not None) or None
 
     return KickbaseSnapshot(
         league_name=me.get("lnm") or leagues[0]["n"],
         budget=me.get("b"),
-        team_value=own["team_value"] if own else None,
+        team_value=team_value,
         placement=own["season_rank"] if own else None,
         squad=squad,
         market=market,
@@ -105,14 +115,16 @@ def load_live_snapshot(league_id_arg: str | None, dump_dir: str | None) -> Kickb
     squad = client.get_squad(league_id)
     market, current_day = client.get_market(league_id)
 
+    # Das "tv"-Feld der Ranking-Antwort ist in der Praxis durchgehend 0 (nicht befüllt) —
+    # der Teamwert wird deshalb selbst aus den Marktwerten des Kaders aufsummiert.
+    team_value = sum(p.market_value for p in squad if p.market_value is not None) or None
+
     table: list[dict] = []
-    team_value = None
     placement = None
     if current_day is not None:
         table = client.get_ranking(league_id, current_day)
         own = next((r for r in table if r["user_id"] == client.user_id), None)
         if own:
-            team_value = own["team_value"]
             placement = own["season_rank"]
 
     competition_id = me["raw"].get("cpi", DEFAULT_COMPETITION_ID)
@@ -135,11 +147,18 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     args = parse_args(argv)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Fehler: ANTHROPIC_API_KEY nicht gesetzt (siehe .env.example).", file=sys.stderr)
-        return 1
+    api_key = None
     model = os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
+    if not args.no_claude:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            print(
+                "Fehler: ANTHROPIC_API_KEY nicht gesetzt (siehe .env.example). "
+                "Alternativ --no-claude nutzen, um ohne Anthropic-API-Guthaben nur die "
+                "aufbereiteten Daten auszugeben.",
+                file=sys.stderr,
+            )
+            return 1
 
     try:
         if args.mock:
@@ -150,8 +169,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Fehler: {exc}", file=sys.stderr)
         return 1
 
-    recommendation = get_recommendation(snapshot, api_key=api_key, model=model)
-    report = build_report(snapshot, recommendation)
+    if args.no_claude:
+        report = (
+            f"# Kickbase-Daten — {snapshot.league_name}\n\n"
+            + build_user_prompt(snapshot)
+            + "\n"
+        )
+    else:
+        recommendation = get_recommendation(snapshot, api_key=api_key, model=model)
+        report = build_report(snapshot, recommendation)
 
     print(report)
 

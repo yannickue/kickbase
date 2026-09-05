@@ -78,10 +78,16 @@ def _format_market_offer(o: MarketOffer) -> str:
     parts = [_format_player(o.player)]
     if o.price is not None:
         parts.append(f"Preis: {o.price:,.0f}€".replace(",", "."))
-    if o.expires_at:
-        parts.append(f"Läuft ab: {o.expires_at}")
+    if o.expires_in_seconds is not None:
+        hours = o.expires_in_seconds / 3600
+        if hours < 1:
+            parts.append(f"Läuft in {o.expires_in_seconds // 60} Min. ab")
+        else:
+            parts.append(f"Läuft in {hours:.1f} Std. ab")
     if o.seller:
-        parts.append(f"Verkäufer: {o.seller}")
+        parts.append(f"Anbieter: {o.seller}")
+    else:
+        parts.append("Anbieter: Kickbase (kein Liga-Mitglied)")
     return " | ".join(parts)
 
 

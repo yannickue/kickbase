@@ -96,6 +96,12 @@ def test_get_market_parses_offers_and_day():
     wirtz = next(o for o in offers if "Wirtz" in o.player.name)
     assert wirtz.price == 46500000
     assert wirtz.player.position == "Mittelfeld"
+    assert wirtz.player.name == "Florian Wirtz"
+    assert wirtz.seller is None
+    assert wirtz.expires_in_seconds == 64800
+
+    guirassy = next(o for o in offers if "Guirassy" in o.player.name)
+    assert guirassy.seller == "Rivale_Max"
 
 
 @responses.activate

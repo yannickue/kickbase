@@ -103,9 +103,13 @@ class Player:
     def from_raw(cls, raw: dict[str, Any]) -> "Player":
         pos_code = _pick(raw, "pos", "position", default=None)
         st_code = _pick(raw, "st", "status", default=None)
+        # Kader-Einträge liefern nur "n" (Nachname); Markt-Einträge zusätzlich "fn" (Vorname).
+        first_name = _pick(raw, "fn", default="")
+        last_name = _pick(raw, "n", "name", default="")
+        name = f"{first_name} {last_name}".strip() or "Unbekannt"
         return cls(
             id=str(_pick(raw, "i", "pi", "id", "playerId", default="")),
-            name=_pick(raw, "n", "name", default="Unbekannt"),
+            name=name,
             position=describe_position(pos_code),
             position_code=pos_code,
             team_id=_pick(raw, "tid", "teamId", default=None),
@@ -124,17 +128,18 @@ class Player:
 class MarketOffer:
     player: Player
     price: float | None
-    expires_at: str | None
-    seller: str | None  # None = vom Kickbase-Bot / neutraler Markt
+    expires_in_seconds: int | None  # Kickbase liefert eine Countdown-Sekundenzahl, kein Datum
+    seller: str | None  # None = vom Kickbase-Bot verkauft (kein Liga-Mitglied als Anbieter)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_raw(cls, raw: dict[str, Any]) -> "MarketOffer":
+        seller_obj = _pick(raw, "u", default=None) or {}
         return cls(
             player=Player.from_raw(raw),
             price=_pick(raw, "prc", "price", "mv", default=None),
-            expires_at=_pick(raw, "exs", "expiry", "expiresAt", default=None),
-            seller=_pick(raw, "selN", "sellerName", "seller", default=None),
+            expires_in_seconds=_pick(raw, "exs", "expiry", default=None),
+            seller=_pick(seller_obj, "n", "name", default=None),
             raw=raw,
         )
 
