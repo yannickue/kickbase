@@ -6,26 +6,34 @@ def make_snapshot() -> KickbaseSnapshot:
     squad = [
         Player(
             id="p1",
-            name="Joshua Kimmich",
-            position="MF",
+            name="Kimmich",
+            position="Mittelfeld",
+            position_code=3,
+            team_id="2",
             team="FC Bayern",
             market_value=21_000_000,
-            market_value_trend="up",
+            market_value_change=-500_000,
             points=210,
+            average_points=8,
             status="verletzt",
+            status_code=2,
         )
     ]
     market = [
         MarketOffer(
             player=Player(
                 id="p4",
-                name="Florian Wirtz",
-                position="MF",
+                name="Wirtz",
+                position="Mittelfeld",
+                position_code=3,
+                team_id="4",
                 team="Leverkusen",
                 market_value=45_000_000,
-                market_value_trend="up",
+                market_value_change=900_000,
                 points=240,
+                average_points=9,
                 status="fit",
+                status_code=0,
             ),
             price=46_500_000,
             expires_at="2026-09-06T18:00:00Z",
@@ -39,7 +47,7 @@ def make_snapshot() -> KickbaseSnapshot:
         placement=3,
         squad=squad,
         market=market,
-        table=[{"team_name": "Test Manager", "rank": 3, "points": 812}],
+        table=[{"name": "Test Manager", "season_rank": 3, "season_points": 812}],
     )
 
 

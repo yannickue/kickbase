@@ -1,5 +1,5 @@
 {
-  "it": [
-    { "i": "mock-league-1", "n": "Freunde-Liga" }
+  "lins": [
+    { "i": "mock-league-1", "n": "Freunde-Liga", "cpi": "1" }
   ]
 }

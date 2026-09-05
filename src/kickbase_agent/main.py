@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from .claude_advisor import DEFAULT_MODEL, KickbaseSnapshot, get_recommendation
 from .kickbase_client import (
+    DEFAULT_COMPETITION_ID,
     KickbaseClient,
     KickbaseError,
     MarketOffer,
@@ -40,24 +41,46 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _apply_team_names(players: list[Player], team_names: dict[str, str]) -> None:
+    for p in players:
+        if p.team_id and p.team_id in team_names:
+            p.team = team_names[p.team_id]
+
+
 def load_mock_snapshot() -> KickbaseSnapshot:
-    leagues = _load_json(FIXTURES_DIR / "leagues.json")["it"]
+    leagues = _load_json(FIXTURES_DIR / "leagues.json")["lins"]
     me = _load_json(FIXTURES_DIR / "me.json")
-    squad_raw = _load_json(FIXTURES_DIR / "squad.json")["players"]
-    market_raw = _load_json(FIXTURES_DIR / "market.json")["it"]
-    table_raw = _load_json(FIXTURES_DIR / "table.json")["us"]
+    squad_raw = _load_json(FIXTURES_DIR / "squad.json")["it"]
+    market_raw = _load_json(FIXTURES_DIR / "market.json")
+    ranking_raw = _load_json(FIXTURES_DIR / "ranking.json")["us"]
+    team_table_raw = _load_json(FIXTURES_DIR / "team_table.json")["it"]
+
+    squad = [Player.from_raw(p) for p in squad_raw]
+    market = [MarketOffer.from_raw(m) for m in market_raw["it"]]
+    team_names = {t["tid"]: t["tn"] for t in team_table_raw}
+    _apply_team_names(squad, team_names)
+    _apply_team_names([o.player for o in market], team_names)
+
+    table = [
+        {
+            "user_id": row["i"],
+            "name": row["n"],
+            "team_value": row.get("tv"),
+            "season_points": row.get("sp"),
+            "season_rank": row.get("spl"),
+        }
+        for row in ranking_raw
+    ]
+    own = next((r for r in table if r["user_id"] == "mock-user-1"), None)
 
     return KickbaseSnapshot(
-        league_name=leagues[0]["n"],
+        league_name=me.get("lnm") or leagues[0]["n"],
         budget=me.get("b"),
-        team_value=me.get("tv"),
-        placement=me.get("pl"),
-        squad=[Player.from_raw(p) for p in squad_raw],
-        market=[MarketOffer.from_raw(m) for m in market_raw],
-        table=[
-            {"team_name": row["tn"], "rank": row["pl"], "points": row["sp"]}
-            for row in table_raw
-        ],
+        team_value=own["team_value"] if own else None,
+        placement=own["season_rank"] if own else None,
+        squad=squad,
+        market=market,
+        table=table,
     )
 
 
@@ -76,18 +99,32 @@ def load_live_snapshot(league_id_arg: str | None, dump_dir: str | None) -> Kickb
     league_id = resolve_league_id(client, league_id)
 
     leagues = {l.id: l.name for l in client.get_leagues()}
-    league_name = leagues.get(league_id, f"Liga {league_id}")
+    me = client.get_me(league_id)
+    league_name = me["league_name"] or leagues.get(league_id, f"Liga {league_id}")
 
-    budget_info = client.get_budget(league_id)
     squad = client.get_squad(league_id)
-    market = client.get_market(league_id)
-    table = client.get_table(league_id)
+    market, current_day = client.get_market(league_id)
+
+    table: list[dict] = []
+    team_value = None
+    placement = None
+    if current_day is not None:
+        table = client.get_ranking(league_id, current_day)
+        own = next((r for r in table if r["user_id"] == client.user_id), None)
+        if own:
+            team_value = own["team_value"]
+            placement = own["season_rank"]
+
+    competition_id = me["raw"].get("cpi", DEFAULT_COMPETITION_ID)
+    team_names = client.get_team_names(competition_id)
+    _apply_team_names(squad, team_names)
+    _apply_team_names([o.player for o in market], team_names)
 
     return KickbaseSnapshot(
         league_name=league_name,
-        budget=budget_info["budget"],
-        team_value=budget_info["team_value"],
-        placement=budget_info["placement"],
+        budget=me["budget"],
+        team_value=team_value,
+        placement=placement,
         squad=squad,
         market=market,
         table=table,

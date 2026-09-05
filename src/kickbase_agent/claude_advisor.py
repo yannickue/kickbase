@@ -58,11 +58,18 @@ def _format_player(p: Player) -> str:
     parts = [p.name]
     if p.position:
         parts.append(f"Pos: {p.position}")
+    if p.team:
+        parts.append(f"Verein: {p.team}")
     if p.market_value is not None:
         parts.append(f"MW: {p.market_value:,.0f}€".replace(",", "."))
+    if p.market_value_change is not None:
+        sign = "+" if p.market_value_change >= 0 else ""
+        parts.append(f"MW-Änderung: {sign}{p.market_value_change:,.0f}€".replace(",", "."))
     if p.points is not None:
         parts.append(f"Punkte: {p.points}")
-    if p.status:
+    if p.average_points is not None:
+        parts.append(f"Schnitt: {p.average_points}")
+    if p.status and p.status != "fit":
         parts.append(f"Status: {p.status}")
     return " | ".join(parts)
 
@@ -103,12 +110,12 @@ def build_user_prompt(snapshot: KickbaseSnapshot) -> str:
     else:
         lines.append("(keine Marktdaten verfügbar)")
 
-    lines += ["", "## Tabelle"]
+    lines += ["", "## Tabelle (Saison)"]
     if snapshot.table:
-        for row in snapshot.table:
+        for row in sorted(snapshot.table, key=lambda r: r.get("season_rank") or 999):
             lines.append(
-                f"- Platz {row.get('rank', '?')}: {row.get('team_name', '?')} "
-                f"({row.get('points', '?')} Punkte)"
+                f"- Platz {row.get('season_rank', '?')}: {row.get('name', '?')} "
+                f"({row.get('season_points', '?')} Punkte)"
             )
     else:
         lines.append("(keine Tabellendaten verfügbar)")

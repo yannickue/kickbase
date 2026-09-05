@@ -72,14 +72,29 @@ python -m kickbase_agent.main --output berichte/$(date +%F).md
 ## Wichtiger Hinweis zur Kickbase-API
 
 Kickbase bietet keine offizielle, dokumentierte Public-API an. Dieses Projekt nutzt die
-Endpunkte, die auch die mobile App verwendet (reverse-engineered, wie in etlichen
-Community-Projekten üblich). Das bedeutet:
+Endpunkte, die auch die mobile App verwendet. Pfade, Pflichtfelder und die meisten
+Feldnamen stammen aus der Community-Dokumentation
+[kevinskyba/kickbase-api-doc](https://github.com/kevinskyba/kickbase-api-doc) (Swagger-Spec
++ Postman-Collection mit echten Beispiel-Antworten). Zwei Dinge sind dort **nicht**
+dokumentiert und daher best-effort umgesetzt:
+
+- Die Bedeutung der numerischen Status-Codes (`st`, z.B. 0/1/2/4/8/16) und Positions-Codes
+  (`pos`, 1–4) — die Zuordnung in `STATUS_LABELS`/`POSITION_LABELS`
+  (`kickbase_client.py`) stammt aus verbreitetem Community-Wissen, nicht aus der offiziellen
+  Spec.
+- Das genaue Feld-Schema der Transfermarkt-Einträge — die Spec liefert dafür kein
+  Objekt-Schema. Es wird angenommen, dass ein Markt-Eintrag dieselben Spieler-Felder wie ein
+  Kader-Eintrag trägt, plus `prc` (Preis, aus dem dokumentierten POST-Body beim Einstellen
+  eines Spielers abgeleitet).
+
+Das bedeutet insgesamt:
 
 - Kickbase kann Feldnamen oder Endpunkte jederzeit ändern, ohne Vorankündigung.
 - Die Feld-Zuordnung in `kickbase_client.py` (`_pick`-Aufrufe mit mehreren Kandidaten-Keys)
   ist entsprechend defensiv geschrieben, kann aber trotzdem mal ins Leere laufen.
 - Wenn ein Bericht auffällig leer/falsch aussieht: `--dump-raw ./debug` laufen lassen, die
-  JSON-Dateien ansehen und die betroffenen Key-Listen in `kickbase_client.py` ergänzen.
+  JSON-Dateien ansehen und die betroffenen Key-Listen bzw. Label-Zuordnungen in
+  `kickbase_client.py` ergänzen.
 - Nutze nur deinen eigenen Account und beachte die Nutzungsbedingungen von Kickbase. Der
   Agent führt **keine** automatischen Käufe/Verkäufe aus — er gibt nur Empfehlungen. Alles
   Weitere entscheidest du selbst in der App.

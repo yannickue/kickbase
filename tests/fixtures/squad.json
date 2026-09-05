@@ -1,37 +1,38 @@
 {
-  "players": [
+  "it": [
     {
       "i": "p1",
-      "fn": "Manuel",
       "n": "Neuer",
-      "pos": "TW",
-      "tn": "FC Bayern",
+      "pos": 1,
+      "st": 0,
       "mv": 8500000,
-      "mvt": "up",
-      "tp": 145,
-      "st": "fit"
+      "mvgl": 120000,
+      "p": 145,
+      "ap": 6,
+      "tid": "2"
     },
     {
       "i": "p2",
-      "fn": "Joshua",
       "n": "Kimmich",
-      "pos": "MF",
-      "tn": "FC Bayern",
+      "pos": 3,
+      "st": 2,
       "mv": 21000000,
-      "mvt": "up",
-      "tp": 210,
-      "st": "verletzt"
+      "mvgl": -500000,
+      "p": 210,
+      "ap": 8,
+      "tid": "2"
     },
     {
       "i": "p3",
-      "fn": "Niclas",
       "n": "Fuellkrug",
-      "pos": "ST",
-      "tn": "Dortmund",
+      "pos": 4,
+      "st": 0,
       "mv": 12500000,
-      "mvt": "down",
-      "tp": 178,
-      "st": "fit"
+      "mvgl": -200000,
+      "p": 178,
+      "ap": 7,
+      "tid": "3"
     }
-  ]
+  ],
+  "ua": "content/file/mock.png"
 }

@@ -1,0 +1,8 @@
+{
+  "us": [
+    { "i": "mock-user-1", "n": "Test Manager", "tv": 38750000, "sp": 812, "mdp": 61, "spl": 3, "mdpl": 3 },
+    { "i": "u2", "n": "Rivale_Max", "tv": 41000000, "sp": 940, "mdp": 70, "spl": 1, "mdpl": 1 },
+    { "i": "u3", "n": "Sofa-Coach", "tv": 39500000, "sp": 875, "mdp": 65, "spl": 2, "mdpl": 2 }
+  ],
+  "day": 24
+}
